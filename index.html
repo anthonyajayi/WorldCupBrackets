@@ -387,8 +387,8 @@ matches.forEach((m, i) => {
     );
     const g = el('g', {
       class:'node ' + statusColor(m.status) + (isWinner?' winner':''),
-      'data-team': leaf.node.team,
-      'data-opponent': leaf.opponent,
+      'data-home': m.a.team,
+      'data-away': m.b.team,
       'data-status': m.status,
       'data-score': sLabel,
       'data-time': m.time
@@ -419,8 +419,8 @@ function selectNode(g){
   activeNode = g;
   g.classList.add('selected');
 
-  const team = g.getAttribute('data-team');
-  const opponent = g.getAttribute('data-opponent');
+  const home = g.getAttribute('data-home');
+  const away = g.getAttribute('data-away');
   const status = g.getAttribute('data-status');
   const score = g.getAttribute('data-score');
   const time = g.getAttribute('data-time');
@@ -431,7 +431,7 @@ function selectNode(g){
   centerPanel.className = status + ' show';
   centerPanel.innerHTML = `
     <div class="cp-status">${statusLabel}</div>
-    <div class="cp-teams">${team} <span style="opacity:0.5;">vs</span> ${opponent}</div>
+    <div class="cp-teams">${home} <span style="opacity:0.5;">vs</span> ${away}</div>
     <div class="cp-score">${scoreDisplay}</div>
     <div class="cp-time">${time}</div>
   `;
