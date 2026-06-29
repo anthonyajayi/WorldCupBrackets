@@ -30,7 +30,6 @@
     overflow-x:hidden;
   }
 
-  /* faint pitch stripes */
   body::before{
     content:"";
     position:fixed;
@@ -91,6 +90,38 @@
   .dot.live{background:var(--red);box-shadow:0 0 8px var(--red);}
   .dot.final{background:var(--gold);}
   .dot.upcoming{background:rgba(245,241,232,0.4);}
+
+  .status-badge{
+    position:fixed;
+    top:10px;
+    right:10px;
+    z-index:10;
+    font-family:'JetBrains Mono', monospace;
+    font-size:10px;
+    padding:6px 12px;
+    border-radius:20px;
+    background:rgba(0,0,0,0.7);
+    border:1px solid rgba(245,241,232,0.2);
+    color:rgba(245,241,232,0.7);
+    display:flex;
+    align-items:center;
+    gap:8px;
+  }
+  .status-dot{
+    width:8px;
+    height:8px;
+    border-radius:50%;
+    display:inline-block;
+    animation:pulse-dot 1.5s ease-in-out infinite;
+  }
+  .status-dot.online{background:#4CAF50;}
+  .status-dot.offline{background:#f44336;animation:none;}
+  .status-dot.loading{background:#FFC107;animation:pulse-dot 0.8s ease-in-out infinite;}
+  
+  @keyframes pulse-dot{
+    0%,100%{opacity:1;}
+    50%{opacity:0.3;}
+  }
 
   #stage{
     position:relative;
@@ -168,7 +199,6 @@
     100%{ r:80; opacity:0; stroke-width:0.5;}
   }
 
-  /* Center info panel: replaces the trophy when a match is selected */
   #center-panel{
     position:absolute;
     top:50%;
@@ -238,17 +268,44 @@
   }
   footer a{color:var(--gold);text-decoration:none;}
 
+  .notification{
+    position:fixed;
+    bottom:20px;
+    left:50%;
+    transform:translateX(-50%);
+    background:rgba(0,0,0,0.9);
+    padding:10px 20px;
+    border-radius:10px;
+    border:1px solid var(--red);
+    color:var(--chalk);
+    font-family:'JetBrains Mono', monospace;
+    font-size:12px;
+    z-index:100;
+    opacity:0;
+    transition:opacity 0.3s;
+    pointer-events:none;
+    text-align:center;
+  }
+  .notification.show{opacity:1;}
+
   @media (prefers-reduced-motion: reduce){
     .trophy-pulse.active{animation:none;}
+    .status-dot{animation:none;}
   }
 
   @media (max-width:600px){
     .legend{gap:12px;font-size:10px;}
     h1{font-size:26px;}
+    .status-badge{font-size:8px;padding:4px 8px;}
   }
 </style>
 </head>
 <body>
+
+<div class="status-badge" id="statusBadge">
+  <span class="status-dot loading" id="statusDot"></span>
+  <span id="statusText">Connecting...</span>
+</div>
 
 <header>
   <p class="eyebrow">FIFA World Cup 2026 · United States · Mexico · Canada</p>
@@ -268,14 +325,30 @@
   <div id="center-hint">Tap a team for details</div>
 </div>
 
+<div class="notification" id="notification"></div>
+
 <footer>
-  Scores update from live match data fetched on page load. Reload the page for the latest results. Outer ring shows Round of 32 teams; matches resolve inward toward the final.
+  Scores update from live match data fetched every 30 seconds. 
+  <span id="lastUpdate">Waiting for first update...</span>
+  <br><br>
+  <span style="color:rgba(245,241,232,0.3);font-size:10px;">
+    ⚠️ You need to add your API key from <a href="https://api-football.com/" target="_blank">API-Football</a>
+  </span>
 </footer>
 
 <script>
 /* ---------------------------------------------------------
-   DATA: Round of 32 matchups (pairs as drawn on bracket),
-   merged with real fixture results / schedule.
+   CONFIGURATION - Add your API key here
+--------------------------------------------------------- */
+const API_CONFIG = {
+    key: 'YOUR_API_KEY_HERE', // Get from https://api-football.com/
+    host: 'v3.football.api-sports.io',
+    leagueId: 1, // FIFA World Cup
+    season: 2026
+};
+
+/* ---------------------------------------------------------
+   DATA: Round of 32 matchups
 --------------------------------------------------------- */
 
 const flagEmoji = {
@@ -285,12 +358,19 @@ const flagEmoji = {
   "Switzerland":"🇨🇭","Egypt":"🇪🇬","Australia":"🇦🇺","New Zealand":"🇳🇿","England":"🇬🇧","Congo DR":"🇨🇩","Ecuador":"🇪🇨","Ecudaor":"🇪🇨"
 };
 
-// Each leaf = {team, flag}. Pairs grouped going clockwise from top, matching the source bracket image.
-// status: 'final' | 'live' | 'scheduled'   score: [a,b] or null
+// Team name variations for API matching
+const teamNameVariations = {
+  "USA": ["USA", "United States"],
+  "Bosnia and Herzegovina": ["Bosnia-Herzegovina", "Bosnia"],
+  "Ivory Coast": ["Côte d'Ivoire"],
+  "Congo DR": ["DR Congo", "Congo"],
+  "Ecudaor": ["Ecuador"]
+};
+
 const matches = [
   { a:{team:"Paraguay"}, b:{team:"Germany"}, status:"scheduled", score:null, time:"Mon Jun 29, 9:30 PM BST" },
   { a:{team:"France"}, b:{team:"Sweden"}, status:"scheduled", score:null, time:"Tue Jun 30, 10:00 PM BST" },
-  { a:{team:"South Africa"}, b:{team:"Canada"}, status:"final", score:[0,1], time:"Sun Jun 28, 8:00 PM BST" },
+  { a:{team:"South Africa"}, b:{team:"Canada"}, status:"scheduled", score:null, time:"Sun Jun 28, 8:00 PM BST" },
   { a:{team:"Netherlands"}, b:{team:"Morocco"}, status:"scheduled", score:null, time:"Tue Jun 30, 2:00 AM BST" },
   { a:{team:"Portugal"}, b:{team:"Croatia"}, status:"scheduled", score:null, time:"Fri Jul 3, 12:00 AM BST" },
   { a:{team:"Spain"}, b:{team:"Austria"}, status:"scheduled", score:null, time:"Thu Jul 2, 8:00 PM BST" },
@@ -307,16 +387,120 @@ const matches = [
 ];
 
 /* ---------------------------------------------------------
-   GEOMETRY: place 16 matches radially, mirroring the
-   reference image's left/right symmetric fan-out toward
-   a center trophy.
+   API FUNCTIONS
+--------------------------------------------------------- */
+
+let apiConnected = false;
+let updateInterval = null;
+
+function getTeamName(team) {
+  // Get the primary name for API matching
+  const variations = teamNameVariations[team];
+  if (variations && variations.length > 0) {
+    return variations[0];
+  }
+  return team;
+}
+
+async function fetchLiveMatches() {
+  try {
+    const url = `https://${API_CONFIG.host}/fixtures?league=${API_CONFIG.leagueId}&season=${API_CONFIG.season}`;
+    
+    const response = await fetch(url, {
+      headers: {
+        'x-apisports-key': API_CONFIG.key
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`API Error: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.response;
+  } catch (error) {
+    console.error('Error fetching matches:', error);
+    return null;
+  }
+}
+
+function updateMatchesWithLiveData(apiData) {
+  if (!apiData || !Array.isArray(apiData)) return false;
+
+  let updated = false;
+
+  apiData.forEach(fixture => {
+    const homeTeam = fixture.teams.home.name;
+    const awayTeam = fixture.teams.away.name;
+    
+    // Find matching match in our data
+    matches.forEach(match => {
+      const matchHome = getTeamName(match.a.team);
+      const matchAway = getTeamName(match.b.team);
+      
+      // Check if teams match (including variations)
+      const homeMatch = matchHome === homeTeam || 
+                        (teamNameVariations[match.a.team] && 
+                         teamNameVariations[match.a.team].includes(homeTeam));
+      const awayMatch = matchAway === awayTeam || 
+                        (teamNameVariations[match.b.team] && 
+                         teamNameVariations[match.b.team].includes(awayTeam));
+      
+      if ((homeMatch && awayMatch) || (homeMatch && awayMatch)) {
+        const status = fixture.fixture.status.short;
+        const oldStatus = match.status;
+        const oldScore = match.score ? match.score.join('-') : '';
+        
+        // Update status
+        if (status === '1H' || status === '2H' || status === 'HT') {
+          match.status = 'live';
+        } else if (status === 'FT' || status === 'AET' || status === 'PEN') {
+          match.status = 'final';
+          match.score = [fixture.goals.home || 0, fixture.goals.away || 0];
+        } else if (status === 'NS' || status === 'TBD') {
+          match.status = 'scheduled';
+        } else {
+          match.status = 'scheduled';
+        }
+
+        // Update score for live matches too
+        if (match.status === 'live' && fixture.goals.home !== null) {
+          match.score = [fixture.goals.home || 0, fixture.goals.away || 0];
+        }
+
+        // Update time
+        if (fixture.fixture.date) {
+          const date = new Date(fixture.fixture.date);
+          match.time = date.toLocaleString('en-GB', {
+            weekday: 'short',
+            month: 'short',
+            day: 'numeric',
+            hour: 'numeric',
+            minute: '2-digit',
+            hour12: true
+          });
+        }
+
+        // Check if match was updated
+        if (oldStatus !== match.status || oldScore !== (match.score ? match.score.join('-') : '')) {
+          updated = true;
+        }
+      }
+    });
+  });
+
+  return updated;
+}
+
+/* ---------------------------------------------------------
+   RENDER BRACKET
 --------------------------------------------------------- */
 
 const svg = document.getElementById('bracket-svg');
-const N = matches.length; // 16
-const ringR = 480;        // radius for leaf nodes
-const pairR = 400;        // radius for the joined "pair point"
-const startAngle = -97;   // degrees, top-ish start
+const N = matches.length;
+const ringR = 480;
+const pairR = 400;
+const startAngle = -97;
 const totalSweep = 360;
 const angleStep = totalSweep / N;
 
@@ -332,87 +516,111 @@ function el(tag, attrs={}, parent=svg){
   return e;
 }
 
-const linesGroup = el('g', {id:'lines'});
-const nodesGroup = el('g', {id:'nodes'});
+function renderBracket() {
+  // Clear existing content
+  svg.innerHTML = '';
+  
+  const linesGroup = el('g', {id:'lines'});
+  const nodesGroup = el('g', {id:'nodes'});
 
-function statusColor(status){
-  if(status === 'live') return 'live';
-  if(status === 'final') return 'final';
-  return 'upcoming';
-}
-
-function flagOf(name){
-  return flagEmoji[name] || "🏳️";
-}
-
-matches.forEach((m, i) => {
-  const angA = startAngle + i*angleStep;
-  const angB = angA + angleStep*0.42;
-  const angMid = angA + angleStep*0.21;
-
-  const [ax, ay] = polar(ringR, angA);
-  const [bx, by] = polar(ringR, angB);
-  const [jx, jy] = polar(pairR, angMid); // join point for this pair
-  const [mx, my] = polar(pairR*0.78, angMid); // next-level stub toward center
-
-  // connector lines: each leaf bends toward the join point, then a stub continues inward
-  const decided = m.status === 'final';
-  el('path', {
-    d:`M ${ax},${ay} Q ${jx},${ay} ${jx},${jy}`,
-    class:'bracket-line' + (decided?' decided':'')
-  }, linesGroup);
-  el('path', {
-    d:`M ${bx},${by} Q ${jx},${by} ${jx},${jy}`,
-    class:'bracket-line' + (decided?' decided':'')
-  }, linesGroup);
-  el('path', {
-    d:`M ${jx},${jy} L ${mx},${my}`,
-    class:'bracket-line' + (decided?' decided':'')
-  }, linesGroup);
-
-  // score badge sits at the join point
-  const sLabel = m.score ? `${m.score[0]}–${m.score[1]}` : '';
-  const pillW = sLabel.length > 3 ? 38 : 30;
-  if(m.status !== 'scheduled' || sLabel){
-    el('rect', {
-      x:jx-pillW/2, y:jy-10, width:pillW, height:20, rx:10,
-      class:`score-pill-bg ${statusColor(m.status)}`
-    }, nodesGroup);
-    el('text', {x:jx, y:jy, class:'score-badge'}, nodesGroup).textContent = sLabel || '–';
+  function statusColor(status){
+    if(status === 'live') return 'live';
+    if(status === 'final') return 'final';
+    return 'upcoming';
   }
 
-  [{node:m.a, opponent:m.b.team, ang:angA, x:ax, y:ay, idx:0}, {node:m.b, opponent:m.a.team, ang:angB, x:bx, y:by, idx:1}].forEach(leaf => {
-    const isWinner = decided && m.score && (
-      (leaf.idx===0 && m.score[0] > m.score[1]) || (leaf.idx===1 && m.score[1] > m.score[0])
-    );
-    const g = el('g', {
-      class:'node ' + statusColor(m.status) + (isWinner?' winner':''),
-      'data-home': m.a.team,
-      'data-away': m.b.team,
-      'data-status': m.status,
-      'data-score': sLabel,
-      'data-time': m.time
-    }, nodesGroup);
-    el('circle', {cx:leaf.x, cy:leaf.y, r:24, class:'ring'}, g);
-    el('text', {x:leaf.x, y:leaf.y+1, class:'flag-emoji'}, g).textContent = flagOf(leaf.node.team);
-  });
-});
+  function flagOf(name){
+    return flagEmoji[name] || "🏳️";
+  }
 
-// Center trophy
-const trophyPulseClass = matches.some(m=>m.status==='live') ? 'trophy-pulse active' : 'trophy-pulse';
-const trophyGroup = el('g', {id:'trophy-group', style:'transition:opacity 0.2s;'});
-el('circle', {cx:0, cy:0, r:34, class: trophyPulseClass}, trophyGroup);
-el('circle', {cx:0, cy:0, r:46, fill:'var(--pitch-deep)', stroke:'rgba(245,241,232,0.25)', 'stroke-width':1.4}, trophyGroup);
-el('text', {x:0, y:2, class:'trophy-center'}, trophyGroup).textContent = '🏆';
+  matches.forEach((m, i) => {
+    const angA = startAngle + i*angleStep;
+    const angB = angA + angleStep*0.42;
+    const angMid = angA + angleStep*0.21;
+
+    const [ax, ay] = polar(ringR, angA);
+    const [bx, by] = polar(ringR, angB);
+    const [jx, jy] = polar(pairR, angMid);
+    const [mx, my] = polar(pairR*0.78, angMid);
+
+    const decided = m.status === 'final';
+    
+    // Connector lines
+    el('path', {
+      d:`M ${ax},${ay} Q ${jx},${ay} ${jx},${jy}`,
+      class:'bracket-line' + (decided?' decided':'')
+    }, linesGroup);
+    el('path', {
+      d:`M ${bx},${by} Q ${jx},${by} ${jx},${jy}`,
+      class:'bracket-line' + (decided?' decided':'')
+    }, linesGroup);
+    el('path', {
+      d:`M ${jx},${jy} L ${mx},${my}`,
+      class:'bracket-line' + (decided?' decided':'')
+    }, linesGroup);
+
+    // Score badge
+    const sLabel = m.score ? `${m.score[0]}–${m.score[1]}` : '';
+    const pillW = sLabel.length > 3 ? 38 : 30;
+    if(m.status !== 'scheduled' || sLabel){
+      el('rect', {
+        x:jx-pillW/2, y:jy-10, width:pillW, height:20, rx:10,
+        class:`score-pill-bg ${statusColor(m.status)}`
+      }, nodesGroup);
+      el('text', {x:jx, y:jy, class:'score-badge'}, nodesGroup).textContent = sLabel || '–';
+    }
+
+    // Team nodes
+    [{node:m.a, opponent:m.b.team, ang:angA, x:ax, y:ay, idx:0}, 
+     {node:m.b, opponent:m.a.team, ang:angB, x:bx, y:by, idx:1}].forEach(leaf => {
+      const isWinner = m.status === 'final' && m.score && (
+        (leaf.idx===0 && m.score[0] > m.score[1]) || 
+        (leaf.idx===1 && m.score[1] > m.score[0])
+      );
+      const g = el('g', {
+        class:'node ' + statusColor(m.status) + (isWinner?' winner':''),
+        'data-home': m.a.team,
+        'data-away': m.b.team,
+        'data-status': m.status,
+        'data-score': sLabel,
+        'data-time': m.time
+      }, nodesGroup);
+      el('circle', {cx:leaf.x, cy:leaf.y, r:24, class:'ring'}, g);
+      el('text', {x:leaf.x, y:leaf.y+1, class:'flag-emoji'}, g).textContent = flagOf(leaf.node.team);
+      
+      // Add click handler
+      g.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if(activeNode === g){ clearSelection(); }
+        else { selectNode(g); }
+      });
+    });
+  });
+
+  // Center trophy
+  const trophyPulseClass = matches.some(m=>m.status==='live') ? 'trophy-pulse active' : 'trophy-pulse';
+  const trophyGroup = el('g', {id:'trophy-group', style:'transition:opacity 0.2s;'});
+  el('circle', {cx:0, cy:0, r:34, class: trophyPulseClass}, trophyGroup);
+  el('circle', {cx:0, cy:0, r:46, fill:'var(--pitch-deep)', stroke:'rgba(245,241,232,0.25)', 'stroke-width':1.4}, trophyGroup);
+  el('text', {x:0, y:2, class:'trophy-center'}, trophyGroup).textContent = '🏆';
+
+  // Reattach event listeners for selection
+  document.querySelectorAll('.node').forEach(node => {
+    node.addEventListener('click', function(e) {
+      e.stopPropagation();
+      if(activeNode === this){ clearSelection(); }
+      else { selectNode(this); }
+    });
+  });
+}
 
 /* ---------------------------------------------------------
-   Center panel interaction: selecting a team shows that
-   match's status/score/time in the middle of the bracket,
-   replacing the trophy until deselected.
+   SELECTION HANDLERS
 --------------------------------------------------------- */
+
+let activeNode = null;
 const centerPanel = document.getElementById('center-panel');
 const centerHint = document.getElementById('center-hint');
-let activeNode = null;
 
 function selectNode(g){
   if(activeNode) activeNode.classList.remove('selected');
@@ -425,7 +633,7 @@ function selectNode(g){
   const score = g.getAttribute('data-score');
   const time = g.getAttribute('data-time');
 
-  const statusLabel = status === 'live' ? 'Live now' : status === 'final' ? 'Full time' : 'Upcoming';
+  const statusLabel = status === 'live' ? '⚡ Live now' : status === 'final' ? '✅ Full time' : '📅 Upcoming';
   const scoreDisplay = score && score !== '–' ? score : 'vs';
 
   centerPanel.className = status + ' show';
@@ -435,7 +643,7 @@ function selectNode(g){
     <div class="cp-score">${scoreDisplay}</div>
     <div class="cp-time">${time}</div>
   `;
-  trophyGroup.style.opacity = '0';
+  document.getElementById('trophy-group').style.opacity = '0';
   centerHint.classList.add('hide');
 }
 
@@ -443,23 +651,113 @@ function clearSelection(){
   if(activeNode) activeNode.classList.remove('selected');
   activeNode = null;
   centerPanel.classList.remove('show');
-  trophyGroup.style.opacity = '1';
+  const trophyGroup = document.getElementById('trophy-group');
+  if(trophyGroup) trophyGroup.style.opacity = '1';
   centerHint.classList.remove('hide');
 }
 
-document.querySelectorAll('.node').forEach(g=>{
-  g.addEventListener('click', (e)=>{
-    e.stopPropagation();
-    if(activeNode === g){ clearSelection(); }
-    else { selectNode(g); }
-  });
-});
-
-// Tapping the trophy area or anywhere outside a node clears the selection
-document.getElementById('stage').addEventListener('click', (e)=>{
+// Click outside clears selection
+document.getElementById('stage').addEventListener('click', (e) => {
   if(!e.target.closest('.node')) clearSelection();
 });
 
+/* ---------------------------------------------------------
+   REFRESH FUNCTION
+--------------------------------------------------------- */
+
+let refreshCount = 0;
+
+async function refreshLiveData() {
+  const statusDot = document.getElementById('statusDot');
+  const statusText = document.getElementById('statusText');
+  
+  // Show loading state
+  statusDot.className = 'status-dot loading';
+  statusText.textContent = 'Updating...';
+
+  const data = await fetchLiveMatches();
+  
+  if (data) {
+    const updated = updateMatchesWithLiveData(data);
+    renderBracket();
+    
+    // Update status
+    statusDot.className = 'status-dot online';
+    statusText.textContent = 'Live';
+    apiConnected = true;
+    
+    // Update timestamp
+    const now = new Date();
+    document.getElementById('lastUpdate').textContent = 
+      `Last updated: ${now.toLocaleTimeString()}`;
+    
+    refreshCount++;
+    
+    // Show notification for updates
+    if (updated) {
+      showNotification('📊 Match data updated!');
+    }
+  } else {
+    statusDot.className = 'status-dot offline';
+    statusText.textContent = 'API Error - Check key';
+    apiConnected = false;
+    showNotification('⚠️ Could not fetch live data. Check API key.');
+  }
+}
+
+function showNotification(message) {
+  const notif = document.getElementById('notification');
+  notif.textContent = message;
+  notif.classList.add('show');
+  setTimeout(() => {
+    notif.classList.remove('show');
+  }, 3000);
+}
+
+/* ---------------------------------------------------------
+   INITIALIZATION
+--------------------------------------------------------- */
+
+// Check if API key is configured
+function checkApiKey() {
+  if (API_CONFIG.key === 'YOUR_API_KEY_HERE') {
+    document.getElementById('statusDot').className = 'status-dot offline';
+    document.getElementById('statusText').textContent = '⚠️ No API Key';
+    showNotification('⚠️ Please add your API-Football key in the API_CONFIG');
+    return false;
+  }
+  return true;
+}
+
+// Initial render
+renderBracket();
+
+// Start live updates if API key is set
+if (checkApiKey()) {
+  // Initial fetch
+  refreshLiveData();
+  
+  // Set up auto-refresh every 30 seconds
+  updateInterval = setInterval(refreshLiveData, 30000);
+} else {
+  document.getElementById('lastUpdate').textContent = 
+    '⚠️ Add your API key to enable live updates';
+}
+
+/* ---------------------------------------------------------
+   CLEANUP
+--------------------------------------------------------- */
+
+// Clean up interval on page unload
+window.addEventListener('beforeunload', function() {
+  if (updateInterval) {
+    clearInterval(updateInterval);
+  }
+});
+
+console.log('🏆 World Cup 2026 Bracket Loaded!');
+console.log(`📊 ${matches.length} matches loaded`);
+console.log('🔑 API Key:', API_CONFIG.key === 'YOUR_API_KEY_HERE' ? 'Not set' : 'Configured');
 </script>
 
 </body>
