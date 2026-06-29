@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>World Cup 2026 — Round of 32</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+  :root{
+    --pitch:#0B3D2E;
+    --pitch-deep:#072A20;
+    --chalk:#F5F1E8;
+    --gold:#C9A227;
+    --red:#B3322B;
+    --line:#2E5C49;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:
+      radial-gradient(circle at 50% 42%, var(--pitch) 0%, var(--pitch-deep) 70%, #051a14 100%);
+    color:var(--chalk);
+    font-family:'Oswald', sans-serif;
+    min-height:100vh;
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    overflow-x:hidden;
+  }
+
+  /* faint pitch stripes */
+  body::before{
+    content:"";
+    position:fixed;
+    inset:0;
+    background-image:repeating-linear-gradient(
+      100deg,
+      rgba(255,255,255,0.018) 0px,
+      rgba(255,255,255,0.018) 60px,
+      transparent 60px,
+      transparent 120px
+    );
+    pointer-events:none;
+    z-index:0;
+  }
+
+  header{
+    position:relative;
+    z-index:2;
+    text-align:center;
+    padding:28px 20px 10px;
+  }
+  .eyebrow{
+    font-family:'JetBrains Mono', monospace;
+    font-size:11px;
+    letter-spacing:0.25em;
+    text-transform:uppercase;
+    color:var(--gold);
+    margin:0 0 6px;
+  }
+  h1{
+    margin:0;
+    font-weight:700;
+    font-size:clamp(28px,5vw,46px);
+    letter-spacing:0.01em;
+    text-transform:uppercase;
+  }
+  .sub{
+    font-family:'JetBrains Mono', monospace;
+    font-size:12px;
+    color:rgba(245,241,232,0.55);
+    margin-top:8px;
+  }
+
+  .legend{
+    display:flex;
+    gap:18px;
+    justify-content:center;
+    flex-wrap:wrap;
+    margin:14px 0 4px;
+    font-family:'JetBrains Mono', monospace;
+    font-size:11px;
+    letter-spacing:0.05em;
+    color:rgba(245,241,232,0.7);
+    z-index:2;
+  }
+  .legend span{display:inline-flex;align-items:center;gap:6px;}
+  .dot{width:8px;height:8px;border-radius:50%;display:inline-block;}
+  .dot.live{background:var(--red);box-shadow:0 0 8px var(--red);}
+  .dot.final{background:var(--gold);}
+  .dot.upcoming{background:rgba(245,241,232,0.4);}
+
+  #stage{
+    position:relative;
+    z-index:1;
+    width:min(96vw, 1100px);
+    aspect-ratio:1/1;
+    margin:10px auto 6px;
+    isolation:isolate;
+  }
+  svg{width:100%;height:100%;display:block;overflow:visible;}
+
+  .bracket-line{
+    fill:none;
+    stroke:var(--line);
+    stroke-width:1.6;
+    transition:stroke 0.4s;
+  }
+  .bracket-line.decided{stroke:var(--gold);stroke-width:2;}
+
+  .node{
+    cursor:pointer;
+  }
+  .node circle.ring{
+    fill:var(--pitch-deep);
+    stroke:rgba(245,241,232,0.25);
+    stroke-width:1.4;
+    transition:stroke 0.3s, filter 0.3s;
+  }
+  .node.live circle.ring{stroke:var(--red);filter:drop-shadow(0 0 6px rgba(179,50,43,0.8));}
+  .node.winner circle.ring{stroke:var(--gold);}
+  .node:hover circle.ring{stroke:var(--chalk);}
+  .node.selected circle.ring{stroke:var(--chalk);stroke-width:2.4;filter:drop-shadow(0 0 8px rgba(245,241,232,0.5));}
+
+  .flag-emoji{
+    font-size:20px;
+    text-anchor:middle;
+    dominant-baseline:central;
+    pointer-events:none;
+  }
+
+  .score-badge{
+    font-family:'JetBrains Mono', monospace;
+    font-size:10.5px;
+    font-weight:700;
+    fill:var(--chalk);
+    text-anchor:middle;
+    dominant-baseline:central;
+    pointer-events:none;
+  }
+  .score-pill-bg{
+    fill:var(--pitch-deep);
+    stroke:rgba(245,241,232,0.3);
+    stroke-width:1;
+  }
+  .score-pill-bg.live{stroke:var(--red);}
+  .score-pill-bg.final{stroke:var(--gold);}
+
+  .trophy-center{
+    text-anchor:middle;
+    dominant-baseline:central;
+    font-size:34px;
+    pointer-events:none;
+  }
+  .trophy-pulse{
+    fill:none;
+    stroke:var(--red);
+    stroke-width:1.5;
+    opacity:0;
+  }
+  .trophy-pulse.active{
+    animation:pulse 2.2s ease-out infinite;
+  }
+  @keyframes pulse{
+    0%{ r:34; opacity:0.7; stroke-width:2;}
+    100%{ r:80; opacity:0; stroke-width:0.5;}
+  }
+
+  /* Center info panel: replaces the trophy when a match is selected */
+  #center-panel{
+    position:absolute;
+    top:50%;
+    left:50%;
+    transform:translate(-50%,-50%) scale(0.85);
+    width:172px;
+    text-align:center;
+    pointer-events:none;
+    opacity:0;
+    transition:opacity 0.2s, transform 0.2s;
+    z-index:5;
+  }
+  #center-panel.show{opacity:1;transform:translate(-50%,-50%) scale(1);}
+  #center-panel .cp-status{
+    font-family:'JetBrains Mono', monospace;
+    font-size:10px;
+    letter-spacing:0.2em;
+    text-transform:uppercase;
+    color:var(--red);
+    margin-bottom:4px;
+  }
+  #center-panel.final .cp-status{color:var(--gold);}
+  #center-panel.upcoming .cp-status{color:rgba(245,241,232,0.55);}
+  #center-panel .cp-teams{
+    font-weight:600;
+    font-size:13px;
+    line-height:1.3;
+    margin-bottom:4px;
+  }
+  #center-panel .cp-score{
+    font-family:'JetBrains Mono', monospace;
+    font-weight:700;
+    font-size:22px;
+    letter-spacing:0.02em;
+    margin-bottom:4px;
+  }
+  #center-panel .cp-time{
+    font-family:'JetBrains Mono', monospace;
+    font-size:10px;
+    color:rgba(245,241,232,0.5);
+    line-height:1.4;
+  }
+  #center-hint{
+    position:absolute;
+    top:50%;
+    left:50%;
+    transform:translate(-50%, 38px);
+    font-family:'JetBrains Mono', monospace;
+    font-size:9.5px;
+    letter-spacing:0.1em;
+    text-transform:uppercase;
+    color:rgba(245,241,232,0.35);
+    white-space:nowrap;
+    z-index:5;
+    transition:opacity 0.2s;
+  }
+  #center-hint.hide{opacity:0;}
+
+  footer{
+    z-index:2;
+    font-family:'JetBrains Mono', monospace;
+    font-size:11px;
+    color:rgba(245,241,232,0.4);
+    text-align:center;
+    padding:18px 20px 36px;
+    max-width:560px;
+  }
+  footer a{color:var(--gold);text-decoration:none;}
+
+  @media (prefers-reduced-motion: reduce){
+    .trophy-pulse.active{animation:none;}
+  }
+
+  @media (max-width:600px){
+    .legend{gap:12px;font-size:10px;}
+    h1{font-size:26px;}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <p class="eyebrow">FIFA World Cup 2026 · United States · Mexico · Canada</p>
+  <h1>Round of 32</h1>
+  <p class="sub">Tap any team — score and status appear in the centre</p>
+</header>
+
+<div class="legend">
+  <span><span class="dot live"></span> Live</span>
+  <span><span class="dot final"></span> Final</span>
+  <span><span class="dot upcoming"></span> Upcoming</span>
+</div>
+
+<div id="stage">
+  <svg id="bracket-svg" viewBox="-550 -550 1100 1100"></svg>
+  <div id="center-panel"></div>
+  <div id="center-hint">Tap a team for details</div>
+</div>
+
+<footer>
+  Scores update from live match data fetched on page load. Reload the page for the latest results. Outer ring shows Round of 32 teams; matches resolve inward toward the final.
+</footer>
+
+<script>
+/* ---------------------------------------------------------
+   DATA: Round of 32 matchups (pairs as drawn on bracket),
+   merged with real fixture results / schedule.
+--------------------------------------------------------- */
+
+const flagEmoji = {
+  "Paraguay":"🇵🇾","Germany":"🇩🇪","France":"🇫🇷","Brazil":"🇧🇷","Japan":"🇯🇵","Ivory Coast":"🇨🇮","Norway":"🇳🇴","Mexico":"🇲🇽",
+  "Sweden":"🇸🇪","South Africa":"🇿🇦","Canada":"🇨🇦","Netherlands":"🇳🇱","Morocco":"🇲🇦","Portugal":"🇵🇹","Croatia":"🇭🇷","Spain":"🇪🇸",
+  "Austria":"🇦🇹","USA":"🇺🇸","Bosnia and Herzegovina":"🇧🇦","Belgium":"🇧🇪","Senegal":"🇸🇳","Ghana":"🇬🇭","Colombia":"🇨🇴","Algeria":"🇩🇿",
+  "Switzerland":"🇨🇭","Egypt":"🇪🇬","Australia":"🇦🇺","New Zealand":"🇳🇿","England":"🇬🇧","Congo DR":"🇨🇩","Ecuador":"🇪🇨","Ecudaor":"🇪🇨"
+};
+
+// Each leaf = {team, flag}. Pairs grouped going clockwise from top, matching the source bracket image.
+// status: 'final' | 'live' | 'scheduled'   score: [a,b] or null
+const matches = [
+  { a:{team:"Paraguay"}, b:{team:"Germany"}, status:"scheduled", score:null, time:"Mon Jun 29, 9:30 PM BST" },
+  { a:{team:"France"}, b:{team:"Sweden"}, status:"scheduled", score:null, time:"Tue Jun 30, 10:00 PM BST" },
+  { a:{team:"South Africa"}, b:{team:"Canada"}, status:"final", score:[0,1], time:"Sun Jun 28, 8:00 PM BST" },
+  { a:{team:"Netherlands"}, b:{team:"Morocco"}, status:"scheduled", score:null, time:"Tue Jun 30, 2:00 AM BST" },
+  { a:{team:"Portugal"}, b:{team:"Croatia"}, status:"final", score:[0,0], time:"Sat Jun 27 (Portugal drew Colombia 0-0)" },
+  { a:{team:"Spain"}, b:{team:"Austria"}, status:"scheduled", score:null, time:"Thu Jul 2, 8:00 PM BST" },
+  { a:{team:"USA"}, b:{team:"Bosnia and Herzegovina"}, status:"scheduled", score:null, time:"Thu Jul 2, 1:00 AM BST" },
+  { a:{team:"Belgium"}, b:{team:"Senegal"}, status:"scheduled", score:null, time:"Wed Jul 1, 9:00 PM BST" },
+  { a:{team:"Ghana"}, b:{team:"Colombia"}, status:"final", score:[1,0], time:"Sat Jun 27 (Ghana lost to Croatia 1-2)" },
+  { a:{team:"Algeria"}, b:{team:"Switzerland"}, status:"final", score:[3,3], time:"Sun Jun 28, 3:00 AM BST" },
+  { a:{team:"Egypt"}, b:{team:"Australia"}, status:"final", score:[1,1], time:"Sat Jun 27, 4:00 AM BST" },
+  { a:{team:"New Zealand"}, b:{team:"England"}, status:"final", score:[1,5], time:"Sat Jun 27, 4:00 AM BST" },
+  { a:{team:"Congo DR"}, b:{team:"Ecuador"}, status:"final", score:[3,1], time:"Sat Jun 27, 12:30 AM BST" },
+  { a:{team:"Brazil"}, b:{team:"Japan"}, status:"live", score:[0,0], time:"Mon Jun 29, 6:00 PM BST" },
+  { a:{team:"Ivory Coast"}, b:{team:"Norway"}, status:"scheduled", score:null, time:"Tue Jun 30, 6:00 PM BST" },
+  { a:{team:"Mexico"}, b:{team:"Ecuador"}, status:"scheduled", score:null, time:"Wed Jul 1, 2:00 AM BST" }
+];
+
+/* ---------------------------------------------------------
+   GEOMETRY: place 16 matches radially, mirroring the
+   reference image's left/right symmetric fan-out toward
+   a center trophy.
+--------------------------------------------------------- */
+
+const svg = document.getElementById('bracket-svg');
+const N = matches.length; // 16
+const ringR = 480;        // radius for leaf nodes
+const pairR = 400;        // radius for the joined "pair point"
+const startAngle = -97;   // degrees, top-ish start
+const totalSweep = 360;
+const angleStep = totalSweep / N;
+
+function polar(r, angDeg){
+  const a = (angDeg - 90) * Math.PI/180;
+  return [r*Math.cos(a), r*Math.sin(a)];
+}
+
+function el(tag, attrs={}, parent=svg){
+  const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for(const k in attrs) e.setAttribute(k, attrs[k]);
+  parent.appendChild(e);
+  return e;
+}
+
+const linesGroup = el('g', {id:'lines'});
+const nodesGroup = el('g', {id:'nodes'});
+
+function statusColor(status){
+  if(status === 'live') return 'live';
+  if(status === 'final') return 'final';
+  return 'upcoming';
+}
+
+function flagOf(name){
+  return flagEmoji[name] || "🏳️";
+}
+
+matches.forEach((m, i) => {
+  const angA = startAngle + i*angleStep;
+  const angB = angA + angleStep*0.42;
+  const angMid = angA + angleStep*0.21;
+
+  const [ax, ay] = polar(ringR, angA);
+  const [bx, by] = polar(ringR, angB);
+  const [jx, jy] = polar(pairR, angMid); // join point for this pair
+  const [mx, my] = polar(pairR*0.78, angMid); // next-level stub toward center
+
+  // connector lines: each leaf bends toward the join point, then a stub continues inward
+  const decided = m.status === 'final';
+  el('path', {
+    d:`M ${ax},${ay} Q ${jx},${ay} ${jx},${jy}`,
+    class:'bracket-line' + (decided?' decided':'')
+  }, linesGroup);
+  el('path', {
+    d:`M ${bx},${by} Q ${jx},${by} ${jx},${jy}`,
+    class:'bracket-line' + (decided?' decided':'')
+  }, linesGroup);
+  el('path', {
+    d:`M ${jx},${jy} L ${mx},${my}`,
+    class:'bracket-line' + (decided?' decided':'')
+  }, linesGroup);
+
+  // score badge sits at the join point
+  const sLabel = m.score ? `${m.score[0]}–${m.score[1]}` : '';
+  const pillW = sLabel.length > 3 ? 38 : 30;
+  if(m.status !== 'scheduled' || sLabel){
+    el('rect', {
+      x:jx-pillW/2, y:jy-10, width:pillW, height:20, rx:10,
+      class:`score-pill-bg ${statusColor(m.status)}`
+    }, nodesGroup);
+    el('text', {x:jx, y:jy, class:'score-badge'}, nodesGroup).textContent = sLabel || '–';
+  }
+
+  [{node:m.a, opponent:m.b.team, ang:angA, x:ax, y:ay, idx:0}, {node:m.b, opponent:m.a.team, ang:angB, x:bx, y:by, idx:1}].forEach(leaf => {
+    const isWinner = decided && m.score && (
+      (leaf.idx===0 && m.score[0] > m.score[1]) || (leaf.idx===1 && m.score[1] > m.score[0])
+    );
+    const g = el('g', {
+      class:'node ' + statusColor(m.status) + (isWinner?' winner':''),
+      'data-team': leaf.node.team,
+      'data-opponent': leaf.opponent,
+      'data-status': m.status,
+      'data-score': sLabel,
+      'data-time': m.time
+    }, nodesGroup);
+    el('circle', {cx:leaf.x, cy:leaf.y, r:24, class:'ring'}, g);
+    el('text', {x:leaf.x, y:leaf.y+1, class:'flag-emoji'}, g).textContent = flagOf(leaf.node.team);
+  });
+});
+
+// Center trophy
+const trophyPulseClass = matches.some(m=>m.status==='live') ? 'trophy-pulse active' : 'trophy-pulse';
+const trophyGroup = el('g', {id:'trophy-group', style:'transition:opacity 0.2s;'});
+el('circle', {cx:0, cy:0, r:34, class: trophyPulseClass}, trophyGroup);
+el('circle', {cx:0, cy:0, r:46, fill:'var(--pitch-deep)', stroke:'rgba(245,241,232,0.25)', 'stroke-width':1.4}, trophyGroup);
+el('text', {x:0, y:2, class:'trophy-center'}, trophyGroup).textContent = '🏆';
+
+/* ---------------------------------------------------------
+   Center panel interaction: selecting a team shows that
+   match's status/score/time in the middle of the bracket,
+   replacing the trophy until deselected.
+--------------------------------------------------------- */
+const centerPanel = document.getElementById('center-panel');
+const centerHint = document.getElementById('center-hint');
+let activeNode = null;
+
+function selectNode(g){
+  if(activeNode) activeNode.classList.remove('selected');
+  activeNode = g;
+  g.classList.add('selected');
+
+  const team = g.getAttribute('data-team');
+  const opponent = g.getAttribute('data-opponent');
+  const status = g.getAttribute('data-status');
+  const score = g.getAttribute('data-score');
+  const time = g.getAttribute('data-time');
+
+  const statusLabel = status === 'live' ? 'Live now' : status === 'final' ? 'Full time' : 'Upcoming';
+  const scoreDisplay = score && score !== '–' ? score : 'vs';
+
+  centerPanel.className = status + ' show';
+  centerPanel.innerHTML = `
+    <div class="cp-status">${statusLabel}</div>
+    <div class="cp-teams">${team} <span style="opacity:0.5;">vs</span> ${opponent}</div>
+    <div class="cp-score">${scoreDisplay}</div>
+    <div class="cp-time">${time}</div>
+  `;
+  trophyGroup.style.opacity = '0';
+  centerHint.classList.add('hide');
+}
+
+function clearSelection(){
+  if(activeNode) activeNode.classList.remove('selected');
+  activeNode = null;
+  centerPanel.classList.remove('show');
+  trophyGroup.style.opacity = '1';
+  centerHint.classList.remove('hide');
+}
+
+document.querySelectorAll('.node').forEach(g=>{
+  g.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    if(activeNode === g){ clearSelection(); }
+    else { selectNode(g); }
+  });
+});
+
+// Tapping the trophy area or anywhere outside a node clears the selection
+document.getElementById('stage').addEventListener('click', (e)=>{
+  if(!e.target.closest('.node')) clearSelection();
+});
+
+</script>
+
+</body>
+</html>
