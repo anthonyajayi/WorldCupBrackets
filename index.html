@@ -332,19 +332,22 @@
   <span id="lastUpdate">Waiting for first update...</span>
   <br><br>
   <span style="color:rgba(245,241,232,0.3);font-size:10px;">
-    ⚠️ You need to add your API key from <a href="https://api-football.com/" target="_blank">API-Football</a>
+    Live data via ESPN's public scoreboard API — no API key required.
   </span>
 </footer>
 
 <script>
 /* ---------------------------------------------------------
-   CONFIGURATION - Add your API key here
+   CONFIGURATION
+   Uses ESPN's public (unofficial but free, keyless) scoreboard
+   API instead of API-Football, since it requires no signup or
+   API key: https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard
 --------------------------------------------------------- */
 const API_CONFIG = {
-    key: 'YOUR_API_KEY_HERE', // Get from https://api-football.com/
-    host: 'v3.football.api-sports.io',
-    leagueId: 1, // FIFA World Cup
-    season: 2026
+    baseUrl: 'https://site.api.espn.com/apis/site/v2/sports/soccer/fifa.world/scoreboard',
+    // World Cup 2026 runs June 11 – July 19, 2026. Widening the date
+    // range costs nothing extra and guarantees every match is covered.
+    dateRange: '20260611-20260719'
 };
 
 /* ---------------------------------------------------------
@@ -358,12 +361,12 @@ const flagEmoji = {
   "Switzerland":"🇨🇭","Egypt":"🇪🇬","Australia":"🇦🇺","New Zealand":"🇳🇿","England":"🏴󠁧󠁢󠁥󠁮󠁧󠁿","Congo DR":"🇨🇩","Ecuador":"🇪🇨","Ecudaor":"🇪🇨"
 };
 
-// Team name variations for API matching
+// Team name variations for API matching (aliases ESPN might use)
 const teamNameVariations = {
   "USA": ["USA", "United States"],
-  "Bosnia and Herzegovina": ["Bosnia-Herzegovina", "Bosnia"],
-  "Ivory Coast": ["Côte d'Ivoire"],
-  "Congo DR": ["DR Congo", "Congo"],
+  "Bosnia and Herzegovina": ["Bosnia-Herzegovina", "Bosnia and Herzegovina", "Bosnia"],
+  "Ivory Coast": ["Ivory Coast", "Côte d'Ivoire", "Cote d'Ivoire"],
+  "Congo DR": ["DR Congo", "Congo DR", "Democratic Republic of the Congo"],
   "Ecudaor": ["Ecuador"]
 };
 
@@ -393,98 +396,103 @@ const matches = [
 let apiConnected = false;
 let updateInterval = null;
 
-function getTeamName(team) {
-  // Get the primary name for API matching
-  const variations = teamNameVariations[team];
-  if (variations && variations.length > 0) {
-    return variations[0];
-  }
-  return team;
+// Normalize a team name for loose matching: lowercase, strip accents,
+// drop anything that isn't a letter or digit.
+function normalizeTeamName(name) {
+  return (name || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+// Does our local team name refer to the same team as this ESPN competitor?
+function teamsMatch(localName, espnTeam) {
+  if (!espnTeam) return false;
+  const espnCandidates = [
+    espnTeam.displayName,
+    espnTeam.shortDisplayName,
+    espnTeam.name,
+    espnTeam.location,
+    espnTeam.abbreviation
+  ].filter(Boolean).map(normalizeTeamName);
+
+  const localCandidates = [localName, ...(teamNameVariations[localName] || [])]
+    .map(normalizeTeamName);
+
+  return localCandidates.some(lc => espnCandidates.includes(lc));
 }
 
 async function fetchLiveMatches() {
   try {
-    const url = `https://${API_CONFIG.host}/fixtures?league=${API_CONFIG.leagueId}&season=${API_CONFIG.season}`;
-    
-    const response = await fetch(url, {
-      headers: {
-        'x-apisports-key': API_CONFIG.key
-      }
-    });
+    const url = `${API_CONFIG.baseUrl}?dates=${API_CONFIG.dateRange}&limit=200`;
+
+    const response = await fetch(url);
 
     if (!response.ok) {
       throw new Error(`API Error: ${response.status}`);
     }
 
     const data = await response.json();
-    return data.response;
+    return data.events || null;
   } catch (error) {
     console.error('Error fetching matches:', error);
     return null;
   }
 }
 
-function updateMatchesWithLiveData(apiData) {
-  if (!apiData || !Array.isArray(apiData)) return false;
+function updateMatchesWithLiveData(events) {
+  if (!events || !Array.isArray(events)) return false;
 
   let updated = false;
 
-  apiData.forEach(fixture => {
-    const homeTeam = fixture.teams.home.name;
-    const awayTeam = fixture.teams.away.name;
-    
-    // Find matching match in our data
+  events.forEach(event => {
+    const competition = event.competitions && event.competitions[0];
+    if (!competition) return;
+
+    const competitors = competition.competitors || [];
+    const home = competitors.find(c => c.homeAway === 'home');
+    const away = competitors.find(c => c.homeAway === 'away');
+    if (!home || !away) return;
+
     matches.forEach(match => {
-      const matchHome = getTeamName(match.a.team);
-      const matchAway = getTeamName(match.b.team);
-      
-      // Check if teams match (including variations)
-      const homeMatch = matchHome === homeTeam || 
-                        (teamNameVariations[match.a.team] && 
-                         teamNameVariations[match.a.team].includes(homeTeam));
-      const awayMatch = matchAway === awayTeam || 
-                        (teamNameVariations[match.b.team] && 
-                         teamNameVariations[match.b.team].includes(awayTeam));
-      
-      if ((homeMatch && awayMatch) || (homeMatch && awayMatch)) {
-        const status = fixture.fixture.status.short;
-        const oldStatus = match.status;
-        const oldScore = match.score ? match.score.join('-') : '';
-        
-        // Update status
-        if (status === '1H' || status === '2H' || status === 'HT') {
-          match.status = 'live';
-        } else if (status === 'FT' || status === 'AET' || status === 'PEN') {
-          match.status = 'final';
-          match.score = [fixture.goals.home || 0, fixture.goals.away || 0];
-        } else if (status === 'NS' || status === 'TBD') {
-          match.status = 'scheduled';
-        } else {
-          match.status = 'scheduled';
-        }
+      const aIsHome = teamsMatch(match.a.team, home.team) && teamsMatch(match.b.team, away.team);
+      const aIsAway = teamsMatch(match.a.team, away.team) && teamsMatch(match.b.team, home.team);
+      if (!aIsHome && !aIsAway) return;
 
-        // Update score for live matches too
-        if (match.status === 'live' && fixture.goals.home !== null) {
-          match.score = [fixture.goals.home || 0, fixture.goals.away || 0];
-        }
+      const oldStatus = match.status;
+      const oldScore = match.score ? match.score.join('-') : '';
 
-        // Update time
-        if (fixture.fixture.date) {
-          const date = new Date(fixture.fixture.date);
-          match.time = date.toLocaleString('en-GB', {
-            weekday: 'short',
-            month: 'short',
-            day: 'numeric',
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true
-          });
-        }
+      const statusType = (competition.status && competition.status.type) || {};
+      if (statusType.state === 'in') {
+        match.status = 'live';
+      } else if (statusType.state === 'post') {
+        match.status = 'final';
+      } else {
+        match.status = 'scheduled';
+      }
 
-        // Check if match was updated
-        if (oldStatus !== match.status || oldScore !== (match.score ? match.score.join('-') : '')) {
-          updated = true;
-        }
+      const homeScore = home.score !== undefined ? parseInt(home.score, 10) : null;
+      const awayScore = away.score !== undefined ? parseInt(away.score, 10) : null;
+      if (!isNaN(homeScore) && !isNaN(awayScore) && homeScore !== null && awayScore !== null &&
+          (match.status === 'live' || match.status === 'final')) {
+        match.score = aIsHome ? [homeScore, awayScore] : [awayScore, homeScore];
+      }
+
+      if (event.date) {
+        const date = new Date(event.date);
+        match.time = date.toLocaleString('en-GB', {
+          weekday: 'short',
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true
+        });
+      }
+
+      // Check if match was updated
+      if (oldStatus !== match.status || oldScore !== (match.score ? match.score.join('-') : '')) {
+        updated = true;
       }
     });
   });
@@ -699,9 +707,9 @@ async function refreshLiveData() {
     }
   } else {
     statusDot.className = 'status-dot offline';
-    statusText.textContent = 'API Error - Check key';
+    statusText.textContent = 'API Error';
     apiConnected = false;
-    showNotification('⚠️ Could not fetch live data. Check API key.');
+    showNotification('⚠️ Could not fetch live data from ESPN.');
   }
 }
 
@@ -718,31 +726,13 @@ function showNotification(message) {
    INITIALIZATION
 --------------------------------------------------------- */
 
-// Check if API key is configured
-function checkApiKey() {
-  if (API_CONFIG.key === 'YOUR_API_KEY_HERE') {
-    document.getElementById('statusDot').className = 'status-dot offline';
-    document.getElementById('statusText').textContent = '⚠️ No API Key';
-    showNotification('⚠️ Please add your API-Football key in the API_CONFIG');
-    return false;
-  }
-  return true;
-}
-
 // Initial render
 renderBracket();
 
-// Start live updates if API key is set
-if (checkApiKey()) {
-  // Initial fetch
-  refreshLiveData();
-  
-  // Set up auto-refresh every 30 seconds
-  updateInterval = setInterval(refreshLiveData, 30000);
-} else {
-  document.getElementById('lastUpdate').textContent = 
-    '⚠️ Add your API key to enable live updates';
-}
+// Initial fetch, then auto-refresh every 30 seconds.
+// No API key needed — ESPN's scoreboard endpoint is public.
+refreshLiveData();
+updateInterval = setInterval(refreshLiveData, 30000);
 
 /* ---------------------------------------------------------
    CLEANUP
@@ -757,7 +747,7 @@ window.addEventListener('beforeunload', function() {
 
 console.log('🏆 World Cup 2026 Bracket Loaded!');
 console.log(`📊 ${matches.length} matches loaded`);
-console.log('🔑 API Key:', API_CONFIG.key === 'YOUR_API_KEY_HERE' ? 'Not set' : 'Configured');
+console.log('🌐 Data source: ESPN public scoreboard API (no key required)');
 </script>
 
 </body>
